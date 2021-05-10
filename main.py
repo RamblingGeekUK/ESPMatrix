@@ -65,7 +65,5 @@ display.text('IJKL', 0, 16, 1)
 display.show()
 
 
-# green  : DIN/mosi = 23
-# blue   : CS 19 
-# pruple : CLK/sck = 18
+
 
