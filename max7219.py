@@ -1,125 +1,99 @@
-from machine import Pin, SPI
+"""
+MicroPython max7219 cascadable 8x8 LED matrix driver
+https://github.com/mcauser/micropython-max7219
+
+MIT License
+Copyright (c) 2017 Mike Causer
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+
 from micropython import const
-import framebuf, utime
+import framebuf
 
-_DIGIT_0 = const(0x1)
+_NOOP = const(0)
+_DIGIT0 = const(1)
+_DECODEMODE = const(9)
+_INTENSITY = const(10)
+_SCANLIMIT = const(11)
+_SHUTDOWN = const(12)
+_DISPLAYTEST = const(15)
 
-_DECODE_MODE = const(0x9)
-_NO_DECODE = const(0x0)
+class Matrix8x8:
+    def __init__(self, spi, cs, num):
+        """
+        Driver for cascading MAX7219 8x8 LED matrices.
 
-_INTENSITY = const(0xa)
-_INTENSITY_MIN = const(0x0)
+        >>> import max7219
+        >>> from machine import Pin, SPI
+        >>> spi = SPI(1)
+        >>> display = max7219.Matrix8x8(spi, Pin('X5'), 4)
+        >>> display.text('1234',0,0,1)
+        >>> display.show()
 
-_SCAN_LIMIT = const(0xb)
-_DISPLAY_ALL_DIGITS = const(0x7)
-
-_SHUTDOWN = const(0xc)
-_SHUTDOWN_MODE = const(0x0)
-_NORMAL_OPERATION = const(0x1)
-
-_DISPLAY_TEST = const(0xf)
-_DISPLAY_TEST_NORMAL_OPERATION = const(0x0)
-
-_MATRIX_SIZE = const(8)
-
-# _SCROLL_SPEED_NORMAL is ms to delay (slow) scrolling text.
-_SCROLL_SPEED_NORMAL = 25
-
-
-class Max7219(framebuf.FrameBuffer):
-    """
-    Driver for MAX7219 8x8 LED matrices
-    https://github.com/vrialland/micropython-max7219
-    Example for ESP8266 with 2x4 matrices (one on top, one on bottom),
-    so we have a 32x16 display area:
-    >>> from machine import Pin, SPI
-    >>> from max7219 import Max7219
-    >>> spi = SPI(1, baudrate=10000000)
-    >>> screen = Max7219(32, 16, spi, Pin(15))
-    >>> screen.rect(0, 0, 32, 16, 1)  # Draws a frame
-    >>> screen.text('Hi!', 4, 4, 1)
-    >>> screen.show()
-    On some matrices, the display is inverted (rotated 180°), in this case
-     you can use `rotate_180=True` in the class constructor.
-    """
-    def __init__(self, width, height, spi, cs, rotate_180=False):
-        # Pins setup
+        """
         self.spi = spi
         self.cs = cs
-        self.cs.init(Pin.OUT, True)
+        self.cs.init(cs.OUT, True)
+        self.buffer = bytearray(8 * num)
+        self.num = num
+        fb = framebuf.FrameBuffer(self.buffer, 8 * num, 8, framebuf.MONO_HLSB)
+        self.framebuf = fb
+        # Provide methods for accessing FrameBuffer graphics primitives. This is a workround
+        # because inheritance from a native class is currently unsupported.
+        # http://docs.micropython.org/en/latest/pyboard/library/framebuf.html
+        self.fill = fb.fill  # (col)
+        self.pixel = fb.pixel # (x, y[, c])
+        self.hline = fb.hline  # (x, y, w, col)
+        self.vline = fb.vline  # (x, y, h, col)
+        self.line = fb.line  # (x1, y1, x2, y2, col)
+        self.rect = fb.rect  # (x, y, w, h, col)
+        self.fill_rect = fb.fill_rect  # (x, y, w, h, col)
+        self.text = fb.text  # (string, x, y, col=1)
+        self.scroll = fb.scroll  # (dx, dy)
+        self.blit = fb.blit  # (fbuf, x, y[, key])
+        self.init()
 
-        # Dimensions
-        self.width = width
-        self.height = height
-        # Guess matrices disposition
-        self.cols = width // _MATRIX_SIZE
-        self.rows = height // _MATRIX_SIZE
-        self.nb_matrices = self.cols * self.rows
-        self.rotate_180 = rotate_180
-        # 1 bit per pixel (on / off) -> 8 bytes per matrix
-        self.buffer = bytearray(width * height // 8)
-        format = framebuf.MONO_HLSB if not self.rotate_180 else framebuf.MONO_HMSB
-        super().__init__(self.buffer, width, height, format)
-
-        # Init display
-        self.init_display()
-
-    def _write_command(self, command, data):
-        """Write command on SPI"""
-        cmd = bytearray([command, data])
+    def _write(self, command, data):
         self.cs(0)
-        for matrix in range(self.nb_matrices):
-            self.spi.write(cmd)
+        for m in range(self.num):
+            self.spi.write(bytearray([command, data]))
         self.cs(1)
 
-    def init_display(self):
-        """Init hardware"""
+    def init(self):
         for command, data in (
-            (_SHUTDOWN, _SHUTDOWN_MODE),  # Prevent flash during init
-            (_DECODE_MODE, _NO_DECODE),
-            (_DISPLAY_TEST, _DISPLAY_TEST_NORMAL_OPERATION),
-            (_INTENSITY, _INTENSITY_MIN),
-            (_SCAN_LIMIT, _DISPLAY_ALL_DIGITS),
-            (_SHUTDOWN, _NORMAL_OPERATION),  # Let's go
+            (_SHUTDOWN, 0),
+            (_DISPLAYTEST, 0),
+            (_SCANLIMIT, 7),
+            (_DECODEMODE, 0),
+            (_SHUTDOWN, 1),
         ):
-            self._write_command(command, data)
-
-        self.fill(0)
-        self.show()
+            self._write(command, data)
 
     def brightness(self, value):
-        # Set display brightness (0 to 15)
-        if not 0 <= value < 16:
-            raise ValueError('Brightness must be between 0 and 15')
-        self._write_command(_INTENSITY, value)
-
-    def marquee(self, message):
-        start = 33
-        extent = 0 - (len(message) * 8) - 32
-        for i in range(start, extent, -1):
-            self.fill(0)
-            self.text(message, i, 0, 1)
-            self.show()
-            utime.sleep_ms(_SCROLL_SPEED_NORMAL)
+        if not 0 <= value <= 15:
+            raise ValueError("Brightness out of range")
+        self._write(_INTENSITY, value)
 
     def show(self):
-        """Update display"""
-        # Write line per line on the matrices
-        for line in range(8):
+        for y in range(8):
             self.cs(0)
-
-            for matrix in range(self.nb_matrices):
-                # Guess where the matrix is placed
-                row, col = divmod(matrix, self.cols)
-                # Compute where the data starts
-                if not self.rotate_180:
-                    offset = row * 8 * self.cols
-                    index = col + line * self.cols + offset
-                else:
-                    offset = 8 * self.cols - row * (8 - line) * self.cols
-                    index = (7 - line) * self.cols + col - offset
-
-                self.spi.write(bytearray([_DIGIT_0 + line,
-                                          self.buffer[index]]))
-
+            for m in range(self.num):
+                self.spi.write(bytearray([_DIGIT0 + y, self.buffer[(y * self.num) + m]]))
             self.cs(1)

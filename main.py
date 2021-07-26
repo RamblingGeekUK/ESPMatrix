@@ -1,69 +1,97 @@
-import network
 from machine import Pin, SPI, ADC, I2C
-import SSD1306
-from max7219 import Max7219
+import network
+import max7219
 import socket
+import mrequests as requests
+from microdot import Microdot, Response
+import max7219
 
-wlan = network.WLAN(network.STA_IF)
-wlan.active(True)
+
+def matrixMessage(msg, slidervalue):
+        spi = SPI(1, baudrate=10000000, polarity=1, phase=0, sck=Pin(18), mosi=Pin(23))
+        ss = Pin(19, Pin.OUT)
+        
+        display = max7219.Matrix8x8(spi, ss, 12)
+        display.fill(0)
+        display.brightness(slidervalue)
+        if not msg:
+                # display.pixel(0,0,1)
+                # display.pixel(1,1,1)
+                # display.hline(0,4,8,1)
+                # display.vline(4,0,8,1)
+                # display.line(8, 0, 16, 8, 1)
+                # display.rect(17,1,6,6,1)
+                # display.fill_rect(25,1,6,6,1)                
+                display.show(msg,0,0,1)
+        else:
+                display.text(msg,0,0,1)
+                display.show()
+
+
 if not wlan.isconnected():
-    # print('connecting to network...')
-    # oled.fill(0)
-    # oled.text('connecting to network...', 0, 10)
-    # oled.show()
-    while not wlan.isconnected():
+     while not wlan.isconnected():
         pass
-# print('network config:', wlan.ifconfig())
-# oled.fill(0)
-# oled.text('network config:', 0, 10)
-# oled.text(wlan.ifconfig()[0], 0, 20)
-# oled.show()
 
-# ESP32 Pin assignment
-# i2c = I2C(-1, scl=Pin(22), sda=Pin(21))
+app = Microdot()
 
-# oled_width = 128
-# oled_height = 32
-# oled = SSD1306.SSD1306_I2C(oled_width, oled_height, i2c)
+htmldoc = """<!DOCTYPE html>
+<html>
+    <head>
+        <title>Matrix Display</title>
+    </head>
+    <body>
+        <div>
+            <h1>Matrix Display</h1>
+            <p>Enter your message</p>
+        </div>
+        <div>
+            <form method="post">
+                <div class="form-group">
+                        <label for="title">Message</label>
+                        <input type="text" name="mxmessage"
+                                placeholder="" class="form-control"
+                                value=""></input>
+                </div>
+                <div class="slidecontainer">
+                        <label for="title">Brightness (<span id="slidervalue"></span>, 0 = dim)</label>
+                        <input type="range" name="brightness" min="0" max="15" value="0" class="slider" id="brightness">
+                </div>
 
-# oled.text('Welcome', 0, 0)
-# oled.text('Starting up.....', 0, 20)
+                <div class="form-group">
+                        <button type="submit" class="btn btn-primary">Submit</button>
+                </div>
+                
+                </form>
+        </div>
+    
+        <script>
+                var slider = document.getElementById("brightness");
+                var output = document.getElementById("slidervalue");
+                output.innerHTML = slider.value;
 
-#p4 = Pin(4, Pin.OUT)
-#p4.on()
+                slider.oninput = function() {
+                        output.innerHTML = this.value;
+                        matrixMessage(mxmessage,this.value);
+                }
+        </script>
 
-
-# def setup_screen():
-#     spi = SPI(1, baudrate=10000000, polarity=1,
-#               phase=0, sck=Pin(19), mosi=Pin(23)) # SCK = cs mosi = din
-#     cs = Pin(18, Pin.OUT)
-#     screen = max7219.Max7219(32, 16, spi, cs)  # Clk PIN (Display)
-#     screen.brightness(10)
-#     return screen
-
-# screen = setup_screen()
-# screen.text('Hi!', 4, 4, 1)
-# screen.show()
-
-spi = SPI(1,
-          baudrate=10000000,
-          polarity=1,
-          phase=0,
-          sck=Pin(18),
-          mosi=Pin(23))
-cs = Pin(19, Pin.OUT)
-display = Max7219(32, 24, spi, cs)
-
-print('Loaded')
-display.brightness(15)
-display.rect(0, 0, 32, 24, 1)  # Draws a frame
-display.text('abcd', 1, 1, 1)
-display.text('EFGH', 0, 8, 1)
-display.text('IJKL', 0, 16, 1)
-#display.marquee('Hello World!')
-
-display.show()
+    </body>
+</html>
+"""
 
 
+@app.route("", methods=["GET", "POST"])
+def serial_number(request):
+    print(request.headers)
+    if request.method == 'POST':
+            msg = request.form['mxmessage']
+            brightness = int(request.form['brightness'])
+            if len(msg) == 0:
+                print(msg)
+                msg = wlan.ifconfig()[0][-3:]
+                matrixMessage(msg,brightness)
+            else:
+                matrixMessage(msg,brightness)
+    return Response(body=htmldoc, headers={"Content-Type": "text/html"})
 
-
+app.run(debug=True)
